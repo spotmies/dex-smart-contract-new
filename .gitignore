@@ -17,3 +17,5 @@ limit_order_backend/engine.log
 
 .DS_Store
 
+node_modules/
+amx_relayer/relayer.sqlite*
