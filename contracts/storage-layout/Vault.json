@@ -1,0 +1,23 @@
+[
+  {
+    "label": "usdc",
+    "slot": "0",
+    "offset": 0,
+    "type": "contract IERC20",
+    "bytes": "20"
+  },
+  {
+    "label": "quoteScale",
+    "slot": "1",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "market",
+    "slot": "2",
+    "offset": 0,
+    "type": "address",
+    "bytes": "20"
+  }
+]

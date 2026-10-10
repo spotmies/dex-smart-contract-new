@@ -1,16 +1,30 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+// Stateless in OZ 5.5 (fixed namespaced slot, zero status == not entered): proxy-safe as-is.
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 import "./Vault.sol";
 import "../oracle/OracleModule.sol";
 
 /// @notice Isolated perpetual market (peer-to-pool).
-contract Market is ReentrancyGuard, Ownable {
+/// @dev UPGRADEABLE. One implementation, one BeaconProxy per market (see MarketFactory), so a
+/// single beacon upgrade moves every market at once.
+///
+/// Rules for any future version - violating these corrupts live positions:
+///   * Storage is APPEND-ONLY. Never reorder, remove, retype or insert above existing variables.
+///   * Former `immutable`s (quote, vault, oracle, priceFeed, quoteDecimals, quoteScale) are
+///     storage now: all proxies share this one bytecode, so an immutable cannot differ per market.
+///   * Values that used to come from field initialisers (`= 10_000_000 * WAD`, `= 10`, `= 1`)
+///     are set in `initialize`. A proxy never runs the implementation's constructor or field
+///     initialisers, so leaving them as initialisers would silently deploy them as zero.
+///   * New initialisation goes in a new `reinitializer(n)` function, never in `initialize`.
+contract Market is Initializable, ReentrancyGuard, OwnableUpgradeable {
     using SafeERC20 for IERC20;
 
     struct Position {
@@ -22,21 +36,21 @@ contract Market is ReentrancyGuard, Ownable {
     }
 
     string public baseSymbol; // e.g., "ETH"
-    IERC20 public immutable quote; // USDC (6d)
-    Vault public immutable vault;
-    OracleModule public immutable oracle;
-    address public immutable priceFeed; // chainlink feed
+    IERC20 public quote; // USDC (6d)
+    Vault public vault;
+    OracleModule public oracle;
+    address public priceFeed; // chainlink feed
 
     uint256 public constant WAD = 1e18;
-    uint256 public immutable quoteDecimals;
-    uint256 public immutable quoteScale;
+    uint256 public quoteDecimals;
+    uint256 public quoteScale;
     uint256 public constant FEE_BPS = 10; // 0.1%
     uint256 public constant BPS_DIV = 10_000;
     uint256 public constant MAINT_MARGIN_BPS = 500; // 5%
     uint256 public constant FUNDING_RATE_FACTOR = 1e11; // ~0.0001% per second (1e18 scale)
 
-    uint256 public maxOpenInterestLong = 10_000_000 * WAD; // 10m notionals
-    uint256 public maxOpenInterestShort = 10_000_000 * WAD;
+    uint256 public maxOpenInterestLong; // initialised to 10m notionals in initialize()
+    uint256 public maxOpenInterestShort; // initialised to 10m notionals in initialize()
 
     uint256 public oiLong;
     uint256 public oiShort;
@@ -56,7 +70,7 @@ contract Market is ReentrancyGuard, Ownable {
     uint256 public sumEntryShort;
 
     // C3: max leverage at open (must stay <20x so initial margin > 5% maintenance).
-    uint256 public maxLeverage = 10;
+    uint256 public maxLeverage; // initialised to 10 in initialize()
 
     int256 public cumulativeFundingLong;
     int256 public cumulativeFundingShort;
@@ -65,7 +79,7 @@ contract Market is ReentrancyGuard, Ownable {
     address public positionManager; // executor authority
 
     // Position ID system for multiple positions per user
-    uint256 public nextPositionId = 1;
+    uint256 public nextPositionId; // initialised to 1 in initialize()
     mapping(uint256 => Position) public positions;
     mapping(address => uint256[]) public userPositionIds;
     mapping(uint256 => address) public positionOwner;
@@ -75,23 +89,37 @@ contract Market is ReentrancyGuard, Ownable {
     event Liquidated(address indexed user, uint256 indexed positionId, bool isLong, uint256 size, uint256 collateral, uint256 price, int256 pnl);
     event FundingUpdated(int256 cumulativeLong, int256 cumulativeShort);
 
-    constructor(
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        // Lock the bare implementation so it can never be initialised and owned directly.
+        _disableInitializers();
+    }
+
+    function initialize(
         string memory _baseSymbol,
         address _quote,
         address _vault,
         address _oracle,
         address _priceFeed,
         address _owner
-    ) Ownable(_owner) {
+    ) external initializer {
+        __Ownable_init(_owner);
+
         baseSymbol = _baseSymbol;
         quote = IERC20(_quote);
         quoteDecimals = IERC20Metadata(_quote).decimals();
         require(quoteDecimals <= 18, "too many decimals");
-        quoteScale = 10**(18 - quoteDecimals);
+        quoteScale = 10 ** (18 - quoteDecimals);
         vault = Vault(_vault);
         oracle = OracleModule(_oracle);
         priceFeed = _priceFeed;
         lastFundingTime = block.timestamp;
+
+        // Former field initialisers; they do not run behind a proxy.
+        maxOpenInterestLong = 10_000_000 * WAD; // 10m notionals
+        maxOpenInterestShort = 10_000_000 * WAD;
+        maxLeverage = 10;
+        nextPositionId = 1;
     }
 
     modifier onlyPM() {

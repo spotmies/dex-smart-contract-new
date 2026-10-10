@@ -33,6 +33,17 @@ if [ -z "$PRIVATE_KEY" ]; then
     exit 1
 fi
 
+# Market and Vault are upgradeable (beacon proxies). Someone must own the right to upgrade them,
+# and it must never default to the deployer key. See script/lib/UpgradeAuthority.sol.
+if [ -z "$UPGRADE_ADMIN" ] && [ -z "$UPGRADE_TIMELOCK_DELAY" ] && [ "$ALLOW_DEPLOYER_UPGRADE_ADMIN" != "true" ]; then
+    echo "Error: upgrade authority is not configured. Set ONE of:"
+    echo "  UPGRADE_ADMIN=<address>          an existing Safe / timelock that will own the beacons"
+    echo "  UPGRADE_TIMELOCK_DELAY=<secs>    deploy a TimelockController (e.g. 172800 = 48h);"
+    echo "                                   UPGRADE_PROPOSER=<address> may propose/execute (default: deployer)"
+    echo "  ALLOW_DEPLOYER_UPGRADE_ADMIN=true   TESTNET ONLY: makes the deployer key the upgrade owner"
+    exit 1
+fi
+
 if [ -z "$USDC_ADDRESS" ]; then
     echo "Error: USDC_ADDRESS is not set. For testnet, please set it in your .env or as an environment variable."
     exit 1

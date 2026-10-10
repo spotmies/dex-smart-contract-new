@@ -2,10 +2,20 @@
 pragma solidity ^0.8.13;
 
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+// Stateless in OZ 5.5 (fixed namespaced slot, zero status == not entered): proxy-safe as-is.
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
-contract P2PTokenEscrows is ReentrancyGuard, Ownable {
+/// @dev UPGRADEABLE behind a TransparentUpgradeableProxy.
+///
+/// Rules for any future version - violating these corrupts live escrow state:
+///   * Storage is APPEND-ONLY. Never reorder, remove, retype or insert above existing variables
+///     (`listings`, `purchases` and every mapping below are live user funds' bookkeeping).
+///   * The `Listing` / `Purchase` structs are stored in arrays: never add, remove or reorder
+///     struct fields, which would shift every existing element's layout.
+///   * New initialisation goes in a new `reinitializer(n)` function, never in `initialize`.
+contract P2PTokenEscrows is Initializable, ReentrancyGuard, OwnableUpgradeable {
     using SafeERC20 for IERC20;
 
     struct Listing {
@@ -63,7 +73,16 @@ contract P2PTokenEscrows is ReentrancyGuard, Ownable {
     event PurchaseDisputed(uint256 indexed purchaseId, address indexed disputer);
     event TokenWhitelistUpdated(address indexed token, bool isWhitelisted);
 
-    constructor() Ownable(msg.sender) {}
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        // Lock the bare implementation so it can never be initialised and owned directly.
+        _disableInitializers();
+    }
+
+    /// @param _owner admin who manages the token whitelist (previously `msg.sender`).
+    function initialize(address _owner) external initializer {
+        __Ownable_init(_owner);
+    }
 
     // ==========================================
     //                 MODIFIERS

@@ -10,6 +10,8 @@ import {MockWETH} from "../src/MockWETH.sol";
 
 // P2P Imports
 import {P2PTokenEscrows} from "../src/P2PTokenEscrow.sol";
+import {UpgradeableDeploy} from "./lib/UpgradeableDeploy.sol";
+import {UpgradeAuthority} from "./lib/UpgradeAuthority.sol";
 
 // Limit Order Imports
 import {LimitOrderProtocol} from "../src/limit_order/LimitOrderProtocol.sol";
@@ -40,7 +42,7 @@ contract MockToken is ERC20 {
     }
 }
 
-contract DeployAll is Script {
+contract DeployAll is UpgradeAuthority {
     function run() external {
         // ------------------------------------------------------------------
         // 0. Setup & Config
@@ -122,8 +124,12 @@ contract DeployAll is Script {
         // ------------------------------------------------------------------
         console.log("\n--- 3. Deploying P2P System ---");
         
-        P2PTokenEscrows p2p = new P2PTokenEscrows();
-        console.log("P2PTokenEscrows deployed at:", address(p2p));
+        // Behind a TransparentUpgradeableProxy; `deployer` administers the whitelist.
+        // Resolved once and reused for the perp beacons below.
+        address upgradeAdmin = _resolveUpgradeAdmin(deployer);
+        (P2PTokenEscrows p2p, address p2pImpl) = UpgradeableDeploy.deployP2P(deployer, upgradeAdmin);
+        console.log("P2PTokenEscrows proxy:", address(p2p));
+        console.log("P2PTokenEscrows implementation:", p2pImpl);
 
         // Whitelist tokens
         p2p.setTokenWhitelist(address(usdc), true);
@@ -170,7 +176,10 @@ contract DeployAll is Script {
         perpRouter.setPositionManager(address(positionManager));
 
         // Market Factory
-        PerpMarketFactory perpMarketFactory = new PerpMarketFactory();
+        UpgradeableDeploy.Perp memory perp = UpgradeableDeploy.deployPerp(upgradeAdmin);
+        PerpMarketFactory perpMarketFactory = perp.factory;
+        console.log("Perp Market beacon:", address(perp.marketBeacon));
+        console.log("Perp Vault beacon:", address(perp.vaultBeacon));
         console.log("Perp MarketFactory deployed at:", address(perpMarketFactory));
 
         // Create ETH-PERP Market

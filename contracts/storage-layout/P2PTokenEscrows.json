@@ -1,0 +1,58 @@
+[
+  {
+    "label": "listings",
+    "slot": "0",
+    "offset": 0,
+    "type": "struct P2PTokenEscrows.Listing[]",
+    "bytes": "32"
+  },
+  {
+    "label": "sellerListings",
+    "slot": "1",
+    "offset": 0,
+    "type": "mapping(address => uint256[])",
+    "bytes": "32"
+  },
+  {
+    "label": "purchases",
+    "slot": "2",
+    "offset": 0,
+    "type": "struct P2PTokenEscrows.Purchase[]",
+    "bytes": "32"
+  },
+  {
+    "label": "listingPurchases",
+    "slot": "3",
+    "offset": 0,
+    "type": "mapping(uint256 => uint256[])",
+    "bytes": "32"
+  },
+  {
+    "label": "buyerPurchases",
+    "slot": "4",
+    "offset": 0,
+    "type": "mapping(address => uint256[])",
+    "bytes": "32"
+  },
+  {
+    "label": "buyerProposedPurchases",
+    "slot": "5",
+    "offset": 0,
+    "type": "mapping(address => uint256[])",
+    "bytes": "32"
+  },
+  {
+    "label": "whitelistedTokens",
+    "slot": "6",
+    "offset": 0,
+    "type": "mapping(address => bool)",
+    "bytes": "32"
+  },
+  {
+    "label": "sellerCompletedPurchases",
+    "slot": "7",
+    "offset": 0,
+    "type": "mapping(address => uint256[])",
+    "bytes": "32"
+  }
+]

@@ -6,6 +6,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {P2PTokenEscrows} from "../src/P2PTokenEscrow.sol"; 
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {UpgradeableDeploy} from "../script/lib/UpgradeableDeploy.sol";
 
 // 1. Create a Mock Token to test transfers
 contract MockUSDT is ERC20 {
@@ -42,7 +43,7 @@ contract P2PTokenEscrowsTest is Test {
 
         // Deploy contracts
         token = new MockUSDT();
-        escrow = new P2PTokenEscrows();
+        (escrow, ) = UpgradeableDeploy.deployP2P(owner, address(this));
 
         // Whitelist the token
         escrow.setTokenWhitelist(address(token), true);

@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+// OZ 5.5 flags ReentrancyGuard as stateless (its status lives in a fixed namespaced slot and an
+// all-zero status already means "not entered"), so the plain contract is proxy-safe and has no
+// separate upgradeable variant.
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
 
 interface IMarket {
     function unrealizedProfits() external view returns (uint256);
@@ -13,11 +18,19 @@ interface IMarket {
 }
 
 /// @notice LP vault for a single isolated market. Holds USDC liquidity and mints LP shares.
-contract Vault is ERC20, ReentrancyGuard, Ownable {
+/// @dev UPGRADEABLE. Deployed once as an implementation and then behind one BeaconProxy per
+/// market (see MarketFactory), so a single beacon upgrade moves every market's vault at once.
+///
+/// Rules for any future version - violating these corrupts live state:
+///   * Storage is APPEND-ONLY. Never reorder, remove, retype or insert above existing variables.
+///   * Anything that used to be `immutable` (usdc, quoteScale) now lives in storage, because
+///     every proxy shares this one implementation's bytecode and so cannot differ by immutable.
+///   * New initialisation goes in a new `reinitializer(n)` function, never in `initialize`.
+contract Vault is Initializable, ERC20Upgradeable, ReentrancyGuard, OwnableUpgradeable {
     using SafeERC20 for IERC20;
 
-    IERC20 public immutable usdc;
-    uint256 public immutable quoteScale;
+    IERC20 public usdc;
+    uint256 public quoteScale;
     address public market; // only market can pull funds
 
     /// @notice Dead shares permanently locked on the first deposit to block first-depositor
@@ -34,11 +47,24 @@ contract Vault is ERC20, ReentrancyGuard, Ownable {
         _;
     }
 
-    constructor(address _usdc) ERC20("Perp LP", "pLP") Ownable(msg.sender) {
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        // Lock the bare implementation so nobody can initialise it directly and take ownership
+        // of the logic contract. Proxies are unaffected: they use their own storage.
+        _disableInitializers();
+    }
+
+    /// @param _usdc quote token this vault custodies.
+    /// @param _owner owner of the vault; MarketFactory passes itself so it can call setMarket once.
+    function initialize(address _usdc, address _owner) external initializer {
+        require(_usdc != address(0), "zero quote");
+        __ERC20_init("Perp LP", "pLP");
+        __Ownable_init(_owner);
+
         usdc = IERC20(_usdc);
-        uint8 decimals = IERC20Metadata(_usdc).decimals();
-        require(decimals <= 18, "too many decimals");
-        quoteScale = 10**(18 - decimals);
+        uint8 decimals_ = IERC20Metadata(_usdc).decimals();
+        require(decimals_ <= 18, "too many decimals");
+        quoteScale = 10 ** (18 - decimals_);
     }
 
     /// @notice one-time market setter by owner/factory.
@@ -122,4 +148,3 @@ contract Vault is ERC20, ReentrancyGuard, Ownable {
         usdc.safeTransferFrom(msg.sender, address(this), amount);
     }
 }
-

@@ -29,8 +29,12 @@ The AMM (Automated Market Maker) is the foundation. It handles swapping and liqu
 ## 2. P2P System
 
 ### Step 2.1: Deploy P2P Escrow
-*   **Contract:** `src/P2PTokenEscrow.sol` -> `P2PTokenEscrows`
-*   **Constructor:** `None`
+*   **Contract:** `src/P2PTokenEscrow.sol` -> `P2PTokenEscrows` (**upgradeable**, behind a `TransparentUpgradeableProxy`)
+*   **Deploy with the script, not `forge create`:** `forge script script/DeployP2PTokenEscrow.s.sol --rpc-url $RPC --broadcast`.
+    A bare `forge create P2PTokenEscrows` produces an implementation whose initializer is permanently
+    locked, i.e. an unusable contract.
+*   **Required env:** `UPGRADE_ADMIN=<address>` *or* `UPGRADE_TIMELOCK_DELAY=<seconds>` (see "Upgradeability" below).
+*   **Record the PROXY address.** It is the escrow's permanent address and never changes across upgrades.
 *   **Post-Deployment:**
     *   Call `setTokenWhitelist(tokenAddress, true)` for every token you want to support (USDC, ETH, BTC).
 
@@ -82,9 +86,13 @@ This system is complex and has a specific order of dependencies.
 ### Step 4.5: Link Router to Position Manager
 *   **Action:** Call `perpRouter.setPositionManager(positionManagerAddress)`
 
-### Step 4.6: Deploy Market Factory
+### Step 4.6: Deploy Market Factory (and the upgrade beacons)
 *   **Contract:** `src/new_perp/src/core/MarketFactory.sol` -> `MarketFactory`
-*   **Constructor:** `None`
+*   **Constructor:** `(address marketBeacon, address vaultBeacon)`: it no longer takes no arguments.
+*   **Deploy with the script:** `DeployNewPerpBSC.s.sol` deploys the Market and Vault implementations,
+    one `UpgradeableBeacon` for each, and then the factory wired to both. `./deploy_bsc.sh` runs it.
+*   **Required env:** `UPGRADE_ADMIN` *or* `UPGRADE_TIMELOCK_DELAY` (see "Upgradeability" below).
+    The script refuses to run on a real network without one.
 
 ### Step 4.7: Create Markets (ETH-PERP, BTC-PERP)
 *   **Action:** Call `perpMarketFactory.createMarket(...)`
@@ -94,7 +102,7 @@ This system is complex and has a specific order of dependencies.
     3.  `oracleModule` (address): Oracle Module (Step 4.1)
     4.  `priceFeed` (address): Chainlink `<BASE>/USD` aggregator (Step 4.2)
     5.  `positionManager` (address): Position Manager (Step 4.4)
-*   **Returns:** `(marketAddress, vaultAddress)`
+*   **Returns:** `(marketAddress, vaultAddress)` (both are `BeaconProxy` addresses and are permanent).
 
 ### Step 4.8: Set Position Manager in Market
 *   **Action:** Call `Market(marketAddress).setPositionManager(positionManagerAddress)` for each market.
@@ -132,3 +140,38 @@ This system is complex and has a specific order of dependencies.
 11. [ ] **Create Markets** (needs tokens, Oracle Mod, Chainlink feed, PM)
 12. [ ] **Copy Trading Vault Impl**
 13. [ ] **Copy Trading Factory** (needs Vault Impl, Executor, AMM Router)
+
+---
+
+## Upgradeability
+
+Upgradeable: the perp **Market** and **Vault** (beacon proxies) and the **P2P escrow** (transparent proxy).
+Deliberately **not** upgradeable: DEX factory/router/pairs/LP tokens, the limit-order protocol, the perp
+Router / PositionManager / OracleModule, and (for now) `AmxSale` / `AmxVault` / copy trading.
+
+**Two separate authorities. Keep them apart:**
+
+| Role | Can | Holder |
+|---|---|---|
+| Upgrade authority (owner of the beacons and of the escrow's `ProxyAdmin`) | replace the logic of every market / vault / the escrow | a `TimelockController` (`UPGRADE_TIMELOCK_DELAY`) or an existing Safe (`UPGRADE_ADMIN`) |
+| Operational owner (`MarketFactory.owner`, each market's `owner`, the escrow's `owner`) | create markets, tune parameters, manage the token whitelist | the deployer / ops key |
+
+Upgrade authority is the more powerful of the two: whoever holds it can replace the code that holds user
+funds. The deploy scripts therefore **refuse** to make the deployer key the upgrade owner on any chain
+except local (31337); `ALLOW_DEPLOYER_UPGRADE_ADMIN=true` overrides that for test networks only.
+
+**Single signer now, multisig later.** Start with `UPGRADE_TIMELOCK_DELAY=172800` (48h) and
+`UPGRADE_PROPOSER=<a dedicated hardware-wallet address, not the deployer key>`. To move to a multisig,
+have the timelock (through its own delay) grant the multisig the proposer and executor roles and revoke the
+old signer. Nothing is redeployed and no contract address changes; this is exercised in
+`test/Upgradeability.t.sol::test_timelock_handoverToANewSigner_keepsEveryAddress`.
+
+**To ship an upgrade:**
+1. Append-only storage: `script/check-storage-layout.sh` must pass (it fails if any variable was moved,
+   removed, retyped, or inserted above an existing one).
+2. Deploy the new implementation. New initialisation goes in a `reinitializer(n)` function, never in `initialize`.
+3. Through the timelock: `schedule` then, after the delay, `execute`
+   `UpgradeableBeacon.upgradeTo(newImplementation)` (Market / Vault), or
+   `ProxyAdmin.upgradeAndCall(proxy, newImplementation, data)` (escrow).
+4. After it ships, re-record the baseline: `script/check-storage-layout.sh --update`.
+

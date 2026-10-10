@@ -6,6 +6,7 @@ import "../src/new_perp/src/core/Market.sol";
 import "../src/new_perp/src/core/Vault.sol";
 import "../src/new_perp/src/oracle/OracleModule.sol";
 import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {UpgradeableDeploy} from "../script/lib/UpgradeableDeploy.sol";
 
 contract MockUSDC18 is ERC20 {
     constructor() ERC20("Mock USDC 18", "mUSDC") {}
@@ -35,8 +36,10 @@ contract BscCompatibilityTest is Test {
         oracleMod = new OracleModule();
         priceFeed = new MockOracle();
         
-        vault = new Vault(address(usdc));
-        market = new Market("BTC", address(usdc), address(vault), address(oracleMod), address(priceFeed), address(this));
+        vault = UpgradeableDeploy.deployVault(address(usdc), address(this), address(this));
+        market = UpgradeableDeploy.deployMarket(
+            "BTC", address(usdc), address(vault), address(oracleMod), address(priceFeed), address(this), address(this)
+        );
         
         vault.setMarket(address(market));
         market.setPositionManager(pm);

@@ -8,6 +8,8 @@ import {PositionManager} from "../src/new_perp/src/router/PositionManager.sol";
 import {MarketFactory} from "../src/new_perp/src/core/MarketFactory.sol";
 import {Market} from "../src/new_perp/src/core/Market.sol";
 import {Vault} from "../src/new_perp/src/core/Vault.sol";
+import {UpgradeableDeploy} from "./lib/UpgradeableDeploy.sol";
+import {UpgradeAuthority} from "./lib/UpgradeAuthority.sol";
 
 /**
  * @notice Deploy New Perp contracts on BSC.
@@ -23,8 +25,16 @@ import {Vault} from "../src/new_perp/src/core/Vault.sol";
  *   USDC_ADDRESS         - quote token (default BSC USDC)
  *   PRICE_FEED_MAX_STALE - seconds; match the feed heartbeat (default 3600 = 1h, conservative)
  *   PRICE_FEED_MIN_E18 / PRICE_FEED_MAX_E18 - optional sanity bounds on the 1e18 price (0 = skip)
+ *
+ * UPGRADEABILITY: Market and Vault are deployed as BeaconProxies (one beacon each), so a single
+ * beacon upgrade moves every market. Who may upgrade is REQUIRED config (see UpgradeAuthority):
+ *   UPGRADE_ADMIN            - use this address (an existing Safe / timelock), OR
+ *   UPGRADE_TIMELOCK_DELAY   - seconds; deploys a TimelockController (UPGRADE_PROPOSER, default
+ *                              the deployer, may propose and execute)
+ * The script refuses to run on a real network without one of these, so the deployer key can never
+ * become the upgrade owner by omission. (ALLOW_DEPLOYER_UPGRADE_ADMIN=true overrides, test nets only.)
  */
-contract DeployNewPerpBSC is Script {
+contract DeployNewPerpBSC is UpgradeAuthority {
     function run() external {
         vm.startBroadcast();
 
@@ -42,6 +52,9 @@ contract DeployNewPerpBSC is Script {
         uint256 maxStale = vm.envOr("PRICE_FEED_MAX_STALE", uint256(3600));
         uint256 minE18 = vm.envOr("PRICE_FEED_MIN_E18", uint256(0));
         uint256 maxE18 = vm.envOr("PRICE_FEED_MAX_E18", uint256(0));
+
+        // Fail fast, before a single contract is deployed, if upgrade authority is not configured.
+        address upgradeAdmin = _resolveUpgradeAdmin(deployer);
 
         console.log("Deploying New Perp on BSC...");
         console.log("Deployer:", deployer);
@@ -92,8 +105,13 @@ contract DeployNewPerpBSC is Script {
             console.log("Liquidation keeper registered:", liquidationKeeper);
         }
 
-        // 6. Market Factory
-        MarketFactory factory = new MarketFactory();
+        // 6. Market + Vault implementations, their beacons (owned by upgradeAdmin), and the factory
+        UpgradeableDeploy.Perp memory perp = UpgradeableDeploy.deployPerp(upgradeAdmin);
+        MarketFactory factory = perp.factory;
+        console.log("Market implementation:", perp.marketImpl);
+        console.log("Vault implementation:", perp.vaultImpl);
+        console.log("Market beacon:", address(perp.marketBeacon));
+        console.log("Vault beacon:", address(perp.vaultBeacon));
         console.log("MarketFactory:", address(factory));
 
         // 7. Create Market priced by the Chainlink feed (C5).
@@ -116,6 +134,10 @@ contract DeployNewPerpBSC is Script {
         console.log("VITE_PERP_VAULT_ADDRESS=", vault);
         console.log("VITE_PERP_POSITION_MANAGER_ADDRESS=", address(positionManager));
         console.log("VITE_USDC_ADDRESS=", usdcAddress);
+        console.log("MARKET_FACTORY_ADDRESS=", address(factory));
+        console.log("MARKET_BEACON_ADDRESS=", address(perp.marketBeacon));
+        console.log("VAULT_BEACON_ADDRESS=", address(perp.vaultBeacon));
+        console.log("UPGRADE_ADMIN (owns both beacons):", upgradeAdmin);
         console.log("Execution delay (blocks):", positionManager.minExecutionDelayBlocks());
         console.log("Keeper (must match backend PRIVATE_KEY wallet):", keeper);
     }

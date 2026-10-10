@@ -9,6 +9,7 @@ import "../src/new_perp/src/oracle/OracleModule.sol";
 import "../src/limit_order/LimitOrderProtocol.sol";
 import "../src/P2PTokenEscrow.sol";
 import "../src/MockERC20.sol";
+import {UpgradeableDeploy} from "../script/lib/UpgradeableDeploy.sol";
 
 // --- helpers -------------------------------------------------------------
 
@@ -56,7 +57,7 @@ contract SecurityFixesContractsTest is Test {
 
     function _deployVault18() internal returns (Vault v, MockERC20 t) {
         t = new MockERC20("Quote18", "Q18"); // 18 decimals → quoteScale == 1 (BSC case)
-        v = new Vault(address(t));
+        v = UpgradeableDeploy.deployVault(address(t), address(this), address(this));
     }
 
     function testH2_FirstDepositLocksDeadShares() public {
@@ -277,7 +278,7 @@ contract SecurityFixesContractsTest is Test {
     // ===================== L2: P2P listing edge cases =====================
 
     function _escrowWithToken() internal returns (P2PTokenEscrows e, MockERC20 t) {
-        e = new P2PTokenEscrows(); // test contract is owner
+        (e, ) = UpgradeableDeploy.deployP2P(address(this), address(this)); // test contract is owner
         t = new MockERC20("Tok", "TOK");
         e.setTokenWhitelist(address(t), true);
     }

@@ -10,6 +10,7 @@ import "../src/new_perp/src/core/Market.sol";
 import "../src/new_perp/src/core/Vault.sol";
 import "../src/new_perp/src/router/Router.sol";
 import "../src/new_perp/src/router/PositionManager.sol";
+import {UpgradeableDeploy} from "../script/lib/UpgradeableDeploy.sol";
 
 contract SecurityAuditTest is Test {
     MockUSDC usdc;
@@ -35,7 +36,8 @@ contract SecurityAuditTest is Test {
         oracleModule = new OracleModule();
         router = new Router(address(usdc));
         pm = new PositionManager(address(router));
-        factory = new MarketFactory();
+        // Market/Vault are beacon proxies now; this test contract owns the beacons.
+        factory = UpgradeableDeploy.deployPerp(address(this)).factory;
 
         (address marketAddr, address vaultAddr) = factory.createMarket(
             "ETH",
