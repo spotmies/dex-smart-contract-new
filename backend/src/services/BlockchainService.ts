@@ -15,7 +15,8 @@ import {
     watchContractEvents,
     toTokens,
     waitForReceipt,
-    prepareEvent
+    prepareEvent,
+    readContract
 } from "thirdweb";
 import { privateKeyToAccount } from "thirdweb/wallets";
 import { client, chain, p2pChain } from "../utils/client.js";
@@ -68,6 +69,41 @@ class BlockchainService {
         console.log("BlockchainService Initialized with Thirdweb SDK");
     }
 
+    /**
+     * Reads one purchase straight from the escrow contract. This is the source of truth for who the
+     * buyer/seller are and what state the trade is in; the DB is only an index and is user-writable
+     * through createTrade, so access decisions must not rely on it.
+     * Throws if the purchase does not exist or the RPC call fails (callers must fail closed).
+     */
+    public async getPurchase(purchaseId: number): Promise<{
+        listingId: number;
+        buyer: string;
+        seller: string;
+        quantityWei: bigint;
+        pricePerTokenWei: bigint;
+        status: 'Proposed' | 'Locked' | 'Released' | 'Refunded' | 'Cancelled' | 'Disputed';
+    }> {
+        if (!this.contract) throw new Error("Contract not initialized");
+        if (!Number.isSafeInteger(purchaseId) || purchaseId < 0) throw new Error("Invalid purchaseId");
+
+        const r = await readContract({
+            contract: this.contract,
+            method: "function purchases(uint256) view returns (uint256 listingId, address buyer, uint256 quantity, uint256 agreedPricePerToken, uint8 status, address seller, uint256 createdAt)",
+            params: [BigInt(purchaseId)]
+        });
+        const STATUSES = ['Proposed', 'Locked', 'Released', 'Refunded', 'Cancelled', 'Disputed'] as const;
+        const status = STATUSES[Number(r[4])];
+        if (!status) throw new Error("Unknown purchase status");
+        return {
+            listingId: Number(r[0]),
+            buyer: String(r[1]),
+            seller: String(r[5]),
+            quantityWei: r[2],
+            pricePerTokenWei: r[3],
+            status
+        };
+    }
+
     public async releasePurchase(purchaseId: number): Promise<string> {
         if (!this.contract || !this.account) throw new Error("Contract or Account not initialized");
 
@@ -87,21 +123,16 @@ class BlockchainService {
 
         console.log(`Transaction submitted. Hash: ${transactionHash}`);
 
-        // Wait for confirmation
-        try {
-            const receipt = await waitForReceipt({
-                client: client,
-                chain: p2pChain,
-                transactionHash: transactionHash
-            });
-            console.log(`Purchase ${purchaseId} release confirmed in block ${receipt.blockNumber}.`);
-        } catch (error) {
-            console.error("Error waiting for transaction receipt:", error);
-            // We still return the hash, but maybe we should throw if it failed?
-            // If waitForReceipt fails, it might be a timeout or revert.
-            // For now, let's log and return hash, but the controller handles the DB update.
-            //Ideally, if it reverts, waitForReceipt might throw.
+        // Wait for confirmation. A reverted or unconfirmed release must NOT be reported as success.
+        const receipt = await waitForReceipt({
+            client: client,
+            chain: p2pChain,
+            transactionHash: transactionHash
+        });
+        if (receipt.status !== "success") {
+            throw new Error(`Release transaction ${transactionHash} reverted`);
         }
+        console.log(`Purchase ${purchaseId} release confirmed in block ${receipt.blockNumber}.`);
 
         return transactionHash;
     }
