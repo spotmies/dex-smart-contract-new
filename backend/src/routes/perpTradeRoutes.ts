@@ -6,6 +6,6 @@ import { csrfProtection } from '../middleware/csrfMiddleware.js';
 const router = express.Router();
 
 router.post('/trade', protect, csrfProtection, createTrade);
-router.get('/trades/:walletAddress', getTradesByAddress);
+router.get('/trades/:walletAddress', protect, getTradesByAddress);
 
 export default router;

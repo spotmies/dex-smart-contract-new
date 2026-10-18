@@ -53,7 +53,7 @@ export const createTrade = async (req: Request, res: Response): Promise<void> =>
             listingId: purchase.listingId,
             buyer,
             seller,
-            quantity: Number(toTokens(purchase.quantityWei, 18)),
+            quantity: Number(toTokens(purchase.quantityWei, await BlockchainService.getQuantityDecimals(purchase.listingId))),
             pricePerToken: Number(toTokens(purchase.pricePerTokenWei, 18)),
             status: purchase.status
         });
