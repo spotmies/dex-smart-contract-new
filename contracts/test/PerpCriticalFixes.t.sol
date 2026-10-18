@@ -10,6 +10,7 @@ import "../src/new_perp/src/core/Market.sol";
 import "../src/new_perp/src/core/Vault.sol";
 import "../src/new_perp/src/router/Router.sol";
 import "../src/new_perp/src/router/PositionManager.sol";
+import {UpgradeableDeploy} from "../script/lib/UpgradeableDeploy.sol";
 
 /// @notice Regression tests for the two critical findings in the new_perp stack.
 ///
@@ -46,7 +47,8 @@ contract PerpCriticalFixesTest is Test {
         oracleModule = new OracleModule();
         router = new Router(address(usdc));
         pm = new PositionManager(address(router));
-        factory = new MarketFactory();
+        // Market/Vault are beacon proxies now; this test contract owns the beacons.
+        factory = UpgradeableDeploy.deployPerp(address(this)).factory;
 
         (address m, address v) = factory.createMarket(
             "ETH", address(usdc), address(oracleModule), address(oracle), address(pm)

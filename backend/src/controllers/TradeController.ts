@@ -4,33 +4,58 @@ import Trade from '../models/Trade.js';
 import User from '../models/User.js';
 import Complaint from '../models/Complaint.js';
 import { normalizeAddress } from '../utils/addressUtils.js';
+import { toTokens } from 'thirdweb';
+
+const sameAddress = (a?: string, b?: string) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
+
+// Never leak RPC/internal error text to clients.
+const CHAIN_UNAVAILABLE = 'Could not verify this trade on-chain. Please try again.';
 
 
-// problem here uniquley need to verify the crypto seller that request should not able to send by imposter..
+// The client only names a purchaseId. Everything else (parties, amounts, state) is read from the escrow
+// contract, and the caller must be the buyer or seller on-chain, so nobody can record a trade for someone else.
 export const createTrade = async (req: Request, res: Response): Promise<void> => {
-    console.log("create trade route got hit...")
     try {
-        const { purchaseId, listingId, buyer, seller, quantity, pricePerToken } = req.body;
-
-        if (purchaseId === undefined || listingId === undefined || !buyer || !seller || !quantity || !pricePerToken) {
-            res.status(400).json({ error: "Missing required fields" });
+        const { purchaseId } = req.body;
+        const pId = Number(purchaseId);
+        if (purchaseId === undefined || !Number.isSafeInteger(pId) || pId < 0) {
+            res.status(400).json({ error: "A valid purchaseId is required" });
             return;
         }
 
-        const existingTrade = await Trade.findOne({ purchaseId: Number(purchaseId) });
+        // @ts-ignore
+        const caller = req.user.walletAddress as string;
+
+        let purchase;
+        try {
+            purchase = await BlockchainService.getPurchase(pId);
+        } catch (e) {
+            console.error("createTrade chain read failed:", e instanceof Error ? e.message : e);
+            res.status(502).json({ error: CHAIN_UNAVAILABLE });
+            return;
+        }
+
+        if (!sameAddress(caller, purchase.buyer) && !sameAddress(caller, purchase.seller)) {
+            res.status(403).json({ error: "You are not a party to this trade" });
+            return;
+        }
+
+        const existingTrade = await Trade.findOne({ purchaseId: pId });
         if (existingTrade) {
             res.status(400).json({ error: "Trade already exists" });
             return;
         }
 
+        const buyer = purchase.buyer;
+        const seller = purchase.seller;
         const newTrade = await Trade.create({
-            purchaseId: Number(purchaseId),
-            listingId: Number(listingId),
+            purchaseId: pId,
+            listingId: purchase.listingId,
             buyer,
             seller,
-            quantity: Number(quantity),
-            pricePerToken: Number(pricePerToken),
-            status: 'Locked'
+            quantity: Number(toTokens(purchase.quantityWei, await BlockchainService.getQuantityDecimals(purchase.listingId))),
+            pricePerToken: Number(toTokens(purchase.pricePerTokenWei, 18)),
+            status: purchase.status
         });
 
         // Referral Logic: Reward referrer if this is the first trade for buyer or seller
@@ -88,30 +113,29 @@ export const releaseFunds = async (req: Request, res: Response): Promise<void> =
             return;
         }
 
-        // Find trade specifically for this seller to avoid stale data collisions
-        const trade = await Trade.findOne({
-            purchaseId: Number(purchaseId),
-            seller: { $regex: `^${walletAddr}$`, $options: 'i' }
-        });
-
-        if (!trade) {
-            res.status(404).json({ error: "Trade not found or you are not the authorized seller" });
+        // On-chain check: only the escrow's recorded seller may trigger a release, and only while it is releasable.
+        let purchase;
+        try {
+            purchase = await BlockchainService.getPurchase(Number(purchaseId));
+        } catch (e) {
+            console.error("releaseFunds chain read failed:", e instanceof Error ? e.message : e);
+            res.status(502).json({ error: CHAIN_UNAVAILABLE });
+            return;
+        }
+        if (!sameAddress(walletAddr, purchase.seller)) {
+            res.status(403).json({ error: "Only the seller of this trade can release funds" });
+            return;
+        }
+        if (purchase.status !== 'Locked' && purchase.status !== 'Disputed') {
+            res.status(409).json({ error: `Trade is ${purchase.status} and cannot be released` });
             return;
         }
 
-        console.log("Checking Authorization:");
-        console.log("Trade ID:", purchaseId);
-        console.log("Trade Seller (DB):", trade.seller);
-        console.log("User Wallet (Token):", walletAddr);
-        console.log("Release funds got hit3...")
-
-
-        // 2. Call Blockchain Service
+        // 2. Call Blockchain Service (throws if the transaction reverts)
         const txHash = await BlockchainService.releasePurchase(Number(purchaseId));
 
         // 3. Update DB
-        trade.status = 'Released';
-        await trade.save();
+        await Trade.findOneAndUpdate({ purchaseId: Number(purchaseId) }, { status: 'Released' });
 
         console.log("Funds released successfully via Backend");
 
@@ -174,19 +198,25 @@ export const reportNotReceived = async (req: Request, res: Response): Promise<vo
             return;
         }
 
-        const trade = await Trade.findOne({
-            purchaseId: Number(purchaseId),
-            seller: { $regex: `^${walletAddr}$`, $options: 'i' }
-        });
-
-        if (!trade) {
-            res.status(404).json({ error: "Trade not found or you are not the authorized seller" });
+        let purchase;
+        try {
+            purchase = await BlockchainService.getPurchase(Number(purchaseId));
+        } catch (e) {
+            console.error("reportNotReceived chain read failed:", e instanceof Error ? e.message : e);
+            res.status(502).json({ error: CHAIN_UNAVAILABLE });
+            return;
+        }
+        if (!sameAddress(walletAddr, purchase.seller)) {
+            res.status(403).json({ error: "Only the seller of this trade can report non-receipt" });
+            return;
+        }
+        if (purchase.status !== 'Locked') {
+            res.status(409).json({ error: `Trade is ${purchase.status}; only a locked trade can be disputed` });
             return;
         }
 
-        // Update status to Disputed
-        trade.status = 'Disputed';
-        await trade.save();
+        // Update status to Disputed (index only; the contract's dispute flow is separate)
+        await Trade.findOneAndUpdate({ purchaseId: Number(purchaseId) }, { status: 'Disputed' });
 
         // Create Complaint entry
         await Complaint.create({

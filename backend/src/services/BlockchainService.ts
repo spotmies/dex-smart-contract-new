@@ -15,9 +15,12 @@ import {
     watchContractEvents,
     toTokens,
     waitForReceipt,
-    prepareEvent
+    prepareEvent,
+    readContract
 } from "thirdweb";
 import { privateKeyToAccount } from "thirdweb/wallets";
+import { JsonRpcProvider, id as topicId } from "ethers";
+import { tokenDecimals } from "../utils/chainVerify.js";
 import { client, chain, p2pChain } from "../utils/client.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -68,6 +71,41 @@ class BlockchainService {
         console.log("BlockchainService Initialized with Thirdweb SDK");
     }
 
+    /**
+     * Reads one purchase straight from the escrow contract. This is the source of truth for who the
+     * buyer/seller are and what state the trade is in; the DB is only an index and is user-writable
+     * through createTrade, so access decisions must not rely on it.
+     * Throws if the purchase does not exist or the RPC call fails (callers must fail closed).
+     */
+    public async getPurchase(purchaseId: number): Promise<{
+        listingId: number;
+        buyer: string;
+        seller: string;
+        quantityWei: bigint;
+        pricePerTokenWei: bigint;
+        status: 'Proposed' | 'Locked' | 'Released' | 'Refunded' | 'Cancelled' | 'Disputed';
+    }> {
+        if (!this.contract) throw new Error("Contract not initialized");
+        if (!Number.isSafeInteger(purchaseId) || purchaseId < 0) throw new Error("Invalid purchaseId");
+
+        const r = await readContract({
+            contract: this.contract,
+            method: "function purchases(uint256) view returns (uint256 listingId, address buyer, uint256 quantity, uint256 agreedPricePerToken, uint8 status, address seller, uint256 createdAt)",
+            params: [BigInt(purchaseId)]
+        });
+        const STATUSES = ['Proposed', 'Locked', 'Released', 'Refunded', 'Cancelled', 'Disputed'] as const;
+        const status = STATUSES[Number(r[4])];
+        if (!status) throw new Error("Unknown purchase status");
+        return {
+            listingId: Number(r[0]),
+            buyer: String(r[1]),
+            seller: String(r[5]),
+            quantityWei: r[2],
+            pricePerTokenWei: r[3],
+            status
+        };
+    }
+
     public async releasePurchase(purchaseId: number): Promise<string> {
         if (!this.contract || !this.account) throw new Error("Contract or Account not initialized");
 
@@ -87,23 +125,116 @@ class BlockchainService {
 
         console.log(`Transaction submitted. Hash: ${transactionHash}`);
 
-        // Wait for confirmation
-        try {
-            const receipt = await waitForReceipt({
-                client: client,
-                chain: p2pChain,
-                transactionHash: transactionHash
-            });
-            console.log(`Purchase ${purchaseId} release confirmed in block ${receipt.blockNumber}.`);
-        } catch (error) {
-            console.error("Error waiting for transaction receipt:", error);
-            // We still return the hash, but maybe we should throw if it failed?
-            // If waitForReceipt fails, it might be a timeout or revert.
-            // For now, let's log and return hash, but the controller handles the DB update.
-            //Ideally, if it reverts, waitForReceipt might throw.
+        // Wait for confirmation. A reverted or unconfirmed release must NOT be reported as success.
+        const receipt = await waitForReceipt({
+            client: client,
+            chain: p2pChain,
+            transactionHash: transactionHash
+        });
+        if (receipt.status !== "success") {
+            throw new Error(`Release transaction ${transactionHash} reverted`);
         }
+        console.log(`Purchase ${purchaseId} release confirmed in block ${receipt.blockNumber}.`);
 
         return transactionHash;
+    }
+
+    /**
+     * Keeps the `Trade` index in step with the escrow contract by reading chain state directly.
+     *
+     * The thirdweb-indexer listener below is not started (it hit RPC block-range errors), so without this nothing
+     * indexes P2P trades created or changed outside the create-trade call (the buyer's proposal, cancellations,
+     * releases done elsewhere, anything missed while the server was down). Chat access depends on these rows.
+     *
+     * Scans purchase events in small block ranges, then re-reads each touched purchase from the contract and upserts
+     * it, so the DB always reflects the chain rather than the event payloads. Idempotent: safe to re-run.
+     * Set P2P_START_BLOCK to the escrow's deployment block for a full historical backfill; if unset only the last
+     * P2P_BACKFILL_BLOCKS (default 5000) are scanned at startup.
+     */
+    public async startPurchaseReconciler(): Promise<void> {
+        const address = process.env.CONTRACT_ADDRESS;
+        if (!this.contract || !address) {
+            console.warn("[reconcile] P2P contract not configured; trade reconciliation disabled");
+            return;
+        }
+        const provider = new JsonRpcProvider(process.env.P2P_RPC_URL || process.env.RPC_URL || "https://bsc-dataseed.binance.org/");
+        const topics = [
+            "PurchaseProposed(uint256,uint256,address,uint256,uint256)",
+            "PurchaseLocked(uint256,uint256,address,uint256)",
+            "PurchaseReleased(uint256,uint256,address,uint256)",
+            "PurchaseRefunded(uint256,uint256,address,uint256)",
+            "PurchaseCancelled(uint256)",
+            "PurchaseDisputed(uint256,address)",
+        ].map((sig) => topicId(sig));
+
+        const CHUNK = 2000;
+        let lastScanned = 0;
+        let running = false;
+
+        const scan = async () => {
+            if (running) return;
+            running = true;
+            try {
+                const head = await provider.getBlockNumber();
+                if (lastScanned === 0) {
+                    const start = Number(process.env.P2P_START_BLOCK) || 0;
+                    lastScanned = (start > 0 ? start : head - (Number(process.env.P2P_BACKFILL_BLOCKS) || 5000)) - 1;
+                }
+                for (let from = lastScanned + 1; from <= head; from += CHUNK) {
+                    const to = Math.min(from + CHUNK - 1, head);
+                    const logs = await provider.getLogs({ address, fromBlock: from, toBlock: to, topics: [topics] });
+                    const ids = new Set<number>();
+                    for (const l of logs) if (l.topics[1]) ids.add(Number(BigInt(l.topics[1])));
+                    for (const purchaseId of ids) await this.syncTradeFromChain(purchaseId);
+                    lastScanned = to; // only advance after the whole range synced, so a failure retries it
+                }
+            } catch (e) {
+                console.error("[reconcile] scan failed (will retry):", e instanceof Error ? e.message : e);
+            } finally {
+                running = false;
+            }
+        };
+
+        await scan();
+        setInterval(scan, 30_000);
+        console.log("[reconcile] P2P trade reconciler started");
+    }
+
+    /**
+     * Decimals of the token a listing sells, so quantities are converted with the token's real precision (a 6-decimal
+     * stablecoin is not 18). Display data only: on any failure it falls back to 18 rather than blocking a trade.
+     */
+    public async getQuantityDecimals(listingId: number): Promise<number> {
+        try {
+            const l = await readContract({
+                contract: this.contract,
+                method: "function listings(uint256) view returns (address seller, address token, uint256 totalAmount, uint256 remaining, uint256 pricePerToken, bool active, uint256 createdAt, bool cancelled)",
+                params: [BigInt(listingId)]
+            });
+            return await tokenDecimals(String(l[1]));
+        } catch (e) {
+            console.warn(`Could not read token decimals for listing ${listingId}; assuming 18:`, e instanceof Error ? e.message : e);
+            return 18;
+        }
+    }
+
+    /** Upserts one Trade row from the contract's own record of the purchase. */
+    private async syncTradeFromChain(purchaseId: number): Promise<void> {
+        const p = await this.getPurchase(purchaseId);
+        const qtyDecimals = await this.getQuantityDecimals(p.listingId);
+        await Trade.findOneAndUpdate(
+            { purchaseId },
+            {
+                purchaseId,
+                listingId: p.listingId,
+                buyer: p.buyer,
+                seller: p.seller,
+                quantity: Number(toTokens(p.quantityWei, qtyDecimals)),
+                pricePerToken: Number(toTokens(p.pricePerTokenWei, 18)),
+                status: p.status,
+            },
+            { upsert: true, returnDocument: "after" }
+        );
     }
 
     public async startEventListener(): Promise<void> {

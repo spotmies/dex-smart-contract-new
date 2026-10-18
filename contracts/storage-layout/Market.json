@@ -1,0 +1,177 @@
+[
+  {
+    "label": "baseSymbol",
+    "slot": "0",
+    "offset": 0,
+    "type": "string",
+    "bytes": "32"
+  },
+  {
+    "label": "quote",
+    "slot": "1",
+    "offset": 0,
+    "type": "contract IERC20",
+    "bytes": "20"
+  },
+  {
+    "label": "vault",
+    "slot": "2",
+    "offset": 0,
+    "type": "contract Vault",
+    "bytes": "20"
+  },
+  {
+    "label": "oracle",
+    "slot": "3",
+    "offset": 0,
+    "type": "contract OracleModule",
+    "bytes": "20"
+  },
+  {
+    "label": "priceFeed",
+    "slot": "4",
+    "offset": 0,
+    "type": "address",
+    "bytes": "20"
+  },
+  {
+    "label": "quoteDecimals",
+    "slot": "5",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "quoteScale",
+    "slot": "6",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "maxOpenInterestLong",
+    "slot": "7",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "maxOpenInterestShort",
+    "slot": "8",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "oiLong",
+    "slot": "9",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "oiShort",
+    "slot": "10",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "totalCollateral",
+    "slot": "11",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "avgEntryLongPrice",
+    "slot": "12",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "avgEntryShortPrice",
+    "slot": "13",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "sumEntryLong",
+    "slot": "14",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "sumEntryShort",
+    "slot": "15",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "maxLeverage",
+    "slot": "16",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "cumulativeFundingLong",
+    "slot": "17",
+    "offset": 0,
+    "type": "int256",
+    "bytes": "32"
+  },
+  {
+    "label": "cumulativeFundingShort",
+    "slot": "18",
+    "offset": 0,
+    "type": "int256",
+    "bytes": "32"
+  },
+  {
+    "label": "lastFundingTime",
+    "slot": "19",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "positionManager",
+    "slot": "20",
+    "offset": 0,
+    "type": "address",
+    "bytes": "20"
+  },
+  {
+    "label": "nextPositionId",
+    "slot": "21",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "positions",
+    "slot": "22",
+    "offset": 0,
+    "type": "mapping(uint256 => struct Market.Position)",
+    "bytes": "32"
+  },
+  {
+    "label": "userPositionIds",
+    "slot": "23",
+    "offset": 0,
+    "type": "mapping(address => uint256[])",
+    "bytes": "32"
+  },
+  {
+    "label": "positionOwner",
+    "slot": "24",
+    "offset": 0,
+    "type": "mapping(uint256 => address)",
+    "bytes": "32"
+  }
+]

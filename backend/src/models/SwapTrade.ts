@@ -16,7 +16,7 @@ const SwapTradeSchema: Schema = new Schema({
     tokenOut: { type: String, required: true },
     amountIn: { type: String, required: true }, // Using string for precision
     amountOut: { type: String, required: true },
-    txHash: { type: String },
+    txHash: { type: String, index: true }, // looked up for idempotency; not unique because older rows may hold empty/duplicate values
     timestamp: { type: Date, default: Date.now }
 });
 

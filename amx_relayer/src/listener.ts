@@ -6,9 +6,43 @@ import amxSaleAbi from "./abis/AmxSale.json" with { type: "json" };
 const bscProvider = new ethers.JsonRpcProvider(config.bscRpcUrl);
 const amxSale = new ethers.Contract(config.amxSaleAddress, amxSaleAbi, bscProvider);
 
-async function scanRange(fromBlock: number, toBlock: number): Promise<void> {
+// Matches ethers' generic UNKNOWN_ERROR wrapping of a JSON-RPC -32602 from eth_getLogs when
+// the toBlock we asked for is past what this specific backend node has. bsc-rpc.publicnode.com
+// is load-balanced across multiple backend nodes, so the node that ends up serving eth_getLogs
+// is occasionally a block behind the one that answered our earlier eth_blockNumber call — the
+// range was valid when computed, just not against whichever node picked up this request.
+const HEAD_LAG_ERROR = /block range extends beyond current head block: requested \d+, head (\d+)/;
+
+/** Scans [fromBlock, toBlock] for Purchased events and returns the last block actually covered.
+ * On a head-lag error, retries once clamped to what that node actually reports as its head,
+ * rather than failing the whole tick — which previously also skipped runExecutorTick() (and
+ * with it reconcileStaleReleases()) for that cycle, see the 2026-09-07 incident notes. */
+async function scanRange(fromBlock: number, toBlock: number): Promise<number> {
     const filter = amxSale.filters.Purchased();
-    const events = await amxSale.queryFilter(filter, fromBlock, toBlock);
+    let events;
+    let actualToBlock = toBlock;
+
+    try {
+        events = await amxSale.queryFilter(filter, fromBlock, toBlock);
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        const match = message.match(HEAD_LAG_ERROR);
+        if (!match) throw err;
+
+        const actualHead = Number(match[1]);
+        if (actualHead < fromBlock) {
+            // This node is lagging behind our own scan position entirely — nothing valid to
+            // request yet. Report no progress; catchUp() stops here and the next tick tries
+            // again, likely hitting a different, caught-up backend node.
+            return fromBlock - 1;
+        }
+
+        console.warn(
+            `[listener] RPC head lag: requested up to ${toBlock}, this node only has ${actualHead} — retrying clamped`
+        );
+        events = await amxSale.queryFilter(filter, fromBlock, actualHead);
+        actualToBlock = actualHead;
+    }
 
     for (const event of events) {
         if (!("args" in event) || !event.args) continue; // skip malformed/unparsed logs
@@ -31,6 +65,8 @@ async function scanRange(fromBlock: number, toBlock: number): Promise<void> {
             `[listener] Purchased seen: tx=${event.transactionHash} logIndex=${event.index} buyer=${buyer} amxOut=${amxOut.toString()}`
         );
     }
+
+    return actualToBlock;
 }
 
 /** Scans from the last-recorded block up to the current chain tip, in safe-sized chunks
@@ -59,9 +95,14 @@ export async function catchUp(): Promise<void> {
 
     while (fromBlock <= currentTip) {
         const toBlock = Math.min(fromBlock + config.backfillChunkSize - 1, currentTip);
-        await scanRange(fromBlock, toBlock);
-        setLastScannedBlock(toBlock);
-        fromBlock = toBlock + 1;
+        const actualToBlock = await scanRange(fromBlock, toBlock);
+        if (actualToBlock < fromBlock) {
+            // No progress this attempt (head-lagging node) — stop for this tick rather than
+            // retrying the same range in a tight loop; the next tick tries again.
+            break;
+        }
+        setLastScannedBlock(actualToBlock);
+        fromBlock = actualToBlock + 1;
     }
 }
 

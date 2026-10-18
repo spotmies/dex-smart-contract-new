@@ -10,6 +10,8 @@ import {PositionManager} from "../src/new_perp/src/router/PositionManager.sol";
 import {MarketFactory} from "../src/new_perp/src/core/MarketFactory.sol";
 import {Market} from "../src/new_perp/src/core/Market.sol";
 import {Vault} from "../src/new_perp/src/core/Vault.sol";
+import {UpgradeableDeploy} from "./lib/UpgradeableDeploy.sol";
+import {UpgradeAuthority} from "./lib/UpgradeAuthority.sol";
 
 /**
  * @notice Deploy all new perpetual contracts in sequence
@@ -34,7 +36,7 @@ import {Vault} from "../src/new_perp/src/core/Vault.sol";
  * - CHAINLINK_FEED_ADDRESS: Real Chainlink feed address (if USE_REAL_ORACLE=true)
  * - INITIAL_VAULT_DEPOSIT: Initial USDC deposit to vault in 6 decimals (e.g., 100000e6 for 100k USDC) - default: 0 (skipped)
  */
-contract DeployNewPerp is Script {
+contract DeployNewPerp is UpgradeAuthority {
     function run() external {
         // Use default Anvil account (has 10000 ETH)
         // Default: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
@@ -132,7 +134,13 @@ contract DeployNewPerp is Script {
         
         // Step 7: Deploy MarketFactory
         console.log("\n=== Step 7: Deploying MarketFactory ===");
-        MarketFactory factory = new MarketFactory();
+        // Market/Vault are BeaconProxies. On a local chain the deployer owns the beacons; elsewhere
+        // set UPGRADE_ADMIN or UPGRADE_TIMELOCK_DELAY (see UpgradeAuthority).
+        address upgradeAdmin = _resolveUpgradeAdmin(deployer);
+        UpgradeableDeploy.Perp memory perp = UpgradeableDeploy.deployPerp(upgradeAdmin);
+        MarketFactory factory = perp.factory;
+        console.log("Market beacon:", address(perp.marketBeacon));
+        console.log("Vault beacon:", address(perp.vaultBeacon));
         console.log("MarketFactory deployed at:", address(factory));
         
         // Step 8: Create Market via Factory

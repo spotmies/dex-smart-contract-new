@@ -57,6 +57,11 @@ connectDB().then(() => {
         console.error("Failed to start Perp Event Listener:", e);
     }
 
+    // 1b. P2P trade reconciler: keeps the Trade index in step with the escrow contract (chat access depends on it)
+    BlockchainService.startPurchaseReconciler().catch((e) => {
+        console.error("Failed to start P2P trade reconciler:", e);
+    });
+
     // 2. Start Price Service (Candle Generator)
     try {
         priceService.start();
