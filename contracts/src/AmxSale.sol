@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.20;
 
-import "@openzeppelin/contracts/access/AccessControl.sol";
-import "@openzeppelin/contracts/utils/Pausable.sol";
+import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
+import "@openzeppelin/contracts-upgradeable/access/AccessControlUpgradeable.sol";
+import "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
+// OZ 5.5 flags ReentrancyGuard as stateless, so the plain contract is proxy-safe.
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
@@ -26,7 +28,15 @@ interface IAggregatorV3 {
 /// misbehaving (a push-payment DoS class of bug), mirroring the custody discipline used in
 /// AmxVault. Sweep destinations are admin-set but always fixed, pre-declared addresses — never
 /// attacker- or caller-supplied.
-contract AmxSale is AccessControl, Pausable, ReentrancyGuard {
+///
+/// UPGRADEABLE: deployed once as an implementation and used through a TransparentUpgradeableProxy;
+/// the proxy address is the sale's permanent address, and depositIds are bound to it (address(this)
+/// is the proxy under delegatecall), so they stay stable across upgrades. Rules for any future
+/// version — violating these corrupts live state:
+///   * Storage is APPEND-ONLY. Never reorder, remove, retype or insert above existing variables.
+///   * Anything that used to be `immutable` (usdc, usdt and their decimals) now lives in storage.
+///   * New initialisation goes in a new `reinitializer(n)` function, never in `initialize`.
+contract AmxSale is Initializable, AccessControlUpgradeable, PausableUpgradeable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
     bytes32 public constant PAUSER_ROLE = keccak256("PAUSER_ROLE");
@@ -36,13 +46,13 @@ contract AmxSale is AccessControl, Pausable, ReentrancyGuard {
     error IncompleteRound();
     error PriceOutOfBounds();
 
-    IERC20 public immutable usdc;
-    IERC20 public immutable usdt;
-    uint8 public immutable usdcDecimals;
-    uint8 public immutable usdtDecimals;
+    IERC20 public usdc;
+    IERC20 public usdt;
+    uint8 public usdcDecimals;
+    uint8 public usdtDecimals;
 
     address public bnbPriceFeed;
-    uint256 public feedMaxStale = 1 hours;
+    uint256 public feedMaxStale; // initialised to 1 hour in initialize()
     uint256 public feedMinPriceE18;
     uint256 public feedMaxPriceE18;
 
@@ -78,7 +88,13 @@ contract AmxSale is AccessControl, Pausable, ReentrancyGuard {
     event PriceFeedUpdated(address feed);
     event FeedConfigUpdated(uint256 maxStale, uint256 minPriceE18, uint256 maxPriceE18);
 
-    constructor(
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        // Lock the bare implementation so nobody can initialise it and take its roles.
+        _disableInitializers();
+    }
+
+    function initialize(
         address admin,
         address pauser,
         address usdcAddress,
@@ -90,7 +106,7 @@ contract AmxSale is AccessControl, Pausable, ReentrancyGuard {
         uint256 initialAmxPriceUsdE18,
         uint256 initialMinPurchaseUsdE18,
         uint256 initialMaxPurchaseUsdE18
-    ) {
+    ) external initializer {
         require(admin != address(0), "invalid admin");
         require(pauser != address(0), "invalid pauser");
         require(usdcAddress != address(0) && usdtAddress != address(0), "invalid stablecoin");
@@ -103,6 +119,9 @@ contract AmxSale is AccessControl, Pausable, ReentrancyGuard {
         require(initialAmxPriceUsdE18 > 0, "invalid price");
         require(initialMinPurchaseUsdE18 > 0 && initialMinPurchaseUsdE18 <= initialMaxPurchaseUsdE18, "invalid limits");
 
+        __AccessControl_init();
+        __Pausable_init();
+
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
         _grantRole(PAUSER_ROLE, pauser);
 
@@ -112,6 +131,7 @@ contract AmxSale is AccessControl, Pausable, ReentrancyGuard {
         usdtDecimals = IERC20Metadata(usdtAddress).decimals();
 
         bnbPriceFeed = bnbPriceFeedAddress;
+        feedMaxStale = 1 hours;
         bnbTreasury = bnbTreasuryAddress;
         usdcTreasury = usdcTreasuryAddress;
         usdtTreasury = usdtTreasuryAddress;

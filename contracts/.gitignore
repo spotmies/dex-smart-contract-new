@@ -20,3 +20,7 @@ node_modules
 # Anyone building this repo must install it once, pinned to the same version as lib/openzeppelin-contracts:
 #   forge install OpenZeppelin/openzeppelin-contracts-upgradeable@v5.5.0 --no-git
 /lib/openzeppelin-contracts-upgradeable/
+
+# London build for Amero X (FOUNDRY_PROFILE=amerox)
+out-amerox/
+cache-amerox/

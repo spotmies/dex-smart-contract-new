@@ -1,0 +1,58 @@
+[
+  {
+    "label": "_released",
+    "slot": "0",
+    "offset": 0,
+    "type": "mapping(bytes32 => bool)",
+    "bytes": "32"
+  },
+  {
+    "label": "releasedInDay",
+    "slot": "1",
+    "offset": 0,
+    "type": "mapping(uint256 => uint256)",
+    "bytes": "32"
+  },
+  {
+    "label": "maxReleasePerTx",
+    "slot": "2",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "maxReleasePerDay",
+    "slot": "3",
+    "offset": 0,
+    "type": "uint256",
+    "bytes": "32"
+  },
+  {
+    "label": "treasuryRecoveryAddress",
+    "slot": "4",
+    "offset": 0,
+    "type": "address",
+    "bytes": "20"
+  },
+  {
+    "label": "legacyVault",
+    "slot": "5",
+    "offset": 0,
+    "type": "address",
+    "bytes": "20"
+  },
+  {
+    "label": "__gap",
+    "slot": "6",
+    "offset": 0,
+    "type": "uint256[44]",
+    "bytes": "1408"
+  },
+  {
+    "label": "testToken",
+    "slot": "50",
+    "offset": 0,
+    "type": "contract IERC20",
+    "bytes": "20"
+  }
+]

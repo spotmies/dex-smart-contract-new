@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.22;
 
 import {Test} from "forge-std/Test.sol";
 import {AmxVaultTestERC20} from "../src/AmxVaultTestERC20.sol";
 import {MockERC20} from "../src/MockERC20.sol";
+import {AmxUpgradeableDeploy} from "../script/lib/AmxUpgradeableDeploy.sol";
 
 /// @dev Smoke-tests the ERC20-specific wiring (topUp, balance tracking, ERC20 payout) plus a
 /// couple of the shared guards, to confirm the AmxVaultBase logic is correctly inherited through
@@ -26,7 +27,11 @@ contract AmxVaultTestERC20Test is Test {
 
     function setUp() public {
         token = new MockERC20("Test AMX", "tAMX");
-        vault = new AmxVaultTestERC20(admin, pauser, executor, MAX_TX, MAX_DAY, recovery, address(token));
+        (vault,) = AmxUpgradeableDeploy.deployTestVault(
+            AmxUpgradeableDeploy.VaultConfig(admin, pauser, executor, MAX_TX, MAX_DAY, recovery, address(0)),
+            address(token),
+            makeAddr("upgradeAdmin")
+        );
 
         token.mint(funder, FUND_AMOUNT);
         vm.prank(funder);

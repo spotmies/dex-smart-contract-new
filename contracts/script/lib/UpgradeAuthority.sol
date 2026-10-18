@@ -34,6 +34,22 @@ abstract contract UpgradeAuthority is Script {
         );
     }
 
+    /// @notice Same rules, but for a contract family with its OWN upgrade authority, read from
+    /// `<prefix>UPGRADE_ADMIN` / `<prefix>UPGRADE_TIMELOCK_DELAY` / `<prefix>UPGRADE_PROPOSER`
+    /// (e.g. prefix "AMX_"). Unlike the default, a timelock here REQUIRES an explicit proposer: it
+    /// never falls back to the deployer, so it can't silently reuse another family's key either.
+    function _resolveUpgradeAdmin(string memory prefix, address deployer) internal returns (address) {
+        address explicitAdmin = vm.envOr(string.concat(prefix, "UPGRADE_ADMIN"), address(0));
+        uint256 timelockDelay = vm.envOr(string.concat(prefix, "UPGRADE_TIMELOCK_DELAY"), uint256(0));
+        address proposer = vm.envOr(string.concat(prefix, "UPGRADE_PROPOSER"), address(0));
+        if (explicitAdmin == address(0) && timelockDelay > 0) {
+            require(proposer != address(0), string.concat(prefix, "UPGRADE_PROPOSER is required"));
+        }
+        return _pickUpgradeAdmin(
+            explicitAdmin, timelockDelay, proposer, vm.envOr("ALLOW_DEPLOYER_UPGRADE_ADMIN", false), deployer
+        );
+    }
+
     /// @dev The rules themselves, with the configuration passed in. Split from the env reads so the
     /// guard can be unit-tested without mutating process-wide environment variables.
     function _pickUpgradeAdmin(

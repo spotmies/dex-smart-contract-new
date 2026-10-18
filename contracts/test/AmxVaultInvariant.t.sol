@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.22;
 
 import {Test} from "forge-std/Test.sol";
 import {AmxVault} from "../src/AmxVault.sol";
+import {AmxUpgradeableDeploy} from "../script/lib/AmxUpgradeableDeploy.sol";
 
 /// @dev Fuzzes sequences of fund()/release() calls (including deliberate depositId reuse) and
 /// tracks ground truth externally so the invariants below can check the vault against it.
@@ -65,7 +66,10 @@ contract AmxVaultInvariantTest is Test {
     address public recovery = makeAddr("recovery");
 
     function setUp() public {
-        vault = new AmxVault(admin, pauser, executor, 100 ether, 500 ether, recovery);
+        (vault,) = AmxUpgradeableDeploy.deployVault(
+            AmxUpgradeableDeploy.VaultConfig(admin, pauser, executor, 100 ether, 500 ether, recovery, address(0)),
+            makeAddr("upgradeAdmin")
+        );
         handler = new AmxVaultHandler(vault, executor);
 
         targetContract(address(handler));

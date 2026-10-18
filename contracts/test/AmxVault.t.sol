@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.22;
 
 import {Test} from "forge-std/Test.sol";
 import {AmxVault} from "../src/AmxVault.sol";
-import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+import {AmxUpgradeableDeploy} from "../script/lib/AmxUpgradeableDeploy.sol";
 
 /// @dev Attempts to re-enter release() from within its own receive(), and separately supports
 /// simply refusing to accept AMX, to exercise both the reentrancy guard and the "payout revert
@@ -48,6 +49,11 @@ contract AmxVaultTest is Test {
     address public recovery = makeAddr("recovery");
     address public buyer = makeAddr("buyer");
     address public stranger = makeAddr("stranger");
+    address public upgradeAdmin = makeAddr("upgradeAdmin");
+
+    /// @dev Shared implementation for the initialize-revert tests, so the only call they make is
+    /// the proxy creation that is expected to revert.
+    AmxVault public impl;
 
     uint256 public constant MAX_TX = 100 ether;
     uint256 public constant MAX_DAY = 500 ether;
@@ -59,51 +65,64 @@ contract AmxVaultTest is Test {
     event EmergencyRecovered(address indexed to, uint256 amount);
 
     function setUp() public {
-        vault = new AmxVault(admin, pauser, executor, MAX_TX, MAX_DAY, recovery);
+        (vault,) = AmxUpgradeableDeploy.deployVault(
+            AmxUpgradeableDeploy.VaultConfig(admin, pauser, executor, MAX_TX, MAX_DAY, recovery, address(0)), upgradeAdmin
+        );
+        impl = new AmxVault();
         vm.deal(address(this), FUND_AMOUNT);
         (bool ok,) = address(vault).call{value: FUND_AMOUNT}("");
         require(ok, "funding failed");
     }
 
+    /// @dev Deploys a vault proxy initialised with the given config, in a single external call.
+    function _deploy(address a, address p, address e, uint256 maxTx, uint256 maxDay, address r)
+        internal
+        returns (AmxVault)
+    {
+        bytes memory init = abi.encodeCall(AmxVault.initialize, (a, p, e, maxTx, maxDay, r, address(0)));
+        return AmxVault(payable(address(new TransparentUpgradeableProxy(address(impl), upgradeAdmin, init))));
+    }
+
     // ==========================================
-    //              CONSTRUCTOR
+    //              INITIALIZE
     // ==========================================
 
-    function test_ConstructorSetsRolesAndConfig() public view {
+    function test_InitializeSetsRolesAndConfig() public view {
         assertTrue(vault.hasRole(vault.DEFAULT_ADMIN_ROLE(), admin));
         assertTrue(vault.hasRole(vault.PAUSER_ROLE(), pauser));
         assertTrue(vault.hasRole(vault.EXECUTOR_ROLE(), executor));
         assertEq(vault.maxReleasePerTx(), MAX_TX);
         assertEq(vault.maxReleasePerDay(), MAX_DAY);
         assertEq(vault.treasuryRecoveryAddress(), recovery);
+        assertEq(vault.legacyVault(), address(0));
     }
 
-    function test_ConstructorRevertsOnZeroAdmin() public {
+    function test_InitializeRevertsOnZeroAdmin() public {
         vm.expectRevert("invalid admin");
-        new AmxVault(address(0), pauser, executor, MAX_TX, MAX_DAY, recovery);
+        _deploy(address(0), pauser, executor, MAX_TX, MAX_DAY, recovery);
     }
 
-    function test_ConstructorRevertsOnZeroPauser() public {
+    function test_InitializeRevertsOnZeroPauser() public {
         vm.expectRevert("invalid pauser");
-        new AmxVault(admin, address(0), executor, MAX_TX, MAX_DAY, recovery);
+        _deploy(admin, address(0), executor, MAX_TX, MAX_DAY, recovery);
     }
 
-    function test_ConstructorRevertsOnZeroExecutor() public {
+    function test_InitializeRevertsOnZeroExecutor() public {
         vm.expectRevert("invalid executor");
-        new AmxVault(admin, pauser, address(0), MAX_TX, MAX_DAY, recovery);
+        _deploy(admin, pauser, address(0), MAX_TX, MAX_DAY, recovery);
     }
 
-    function test_ConstructorRevertsOnZeroRecovery() public {
+    function test_InitializeRevertsOnZeroRecovery() public {
         vm.expectRevert("invalid recovery address");
-        new AmxVault(admin, pauser, executor, MAX_TX, MAX_DAY, address(0));
+        _deploy(admin, pauser, executor, MAX_TX, MAX_DAY, address(0));
     }
 
-    function test_ConstructorRevertsOnInvalidCaps() public {
+    function test_InitializeRevertsOnInvalidCaps() public {
         vm.expectRevert("invalid caps");
-        new AmxVault(admin, pauser, executor, 0, MAX_DAY, recovery);
+        _deploy(admin, pauser, executor, 0, MAX_DAY, recovery);
 
         vm.expectRevert("invalid caps");
-        new AmxVault(admin, pauser, executor, MAX_DAY + 1, MAX_DAY, recovery);
+        _deploy(admin, pauser, executor, MAX_DAY + 1, MAX_DAY, recovery);
     }
 
     // ==========================================

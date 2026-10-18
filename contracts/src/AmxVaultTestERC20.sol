@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.20;
 
 import "./AmxVaultBase.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
@@ -14,14 +14,22 @@ import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 ///
 /// NEVER deploy this to hold real AMX or real funds; it is a distinct, separately-deployed
 /// contract from the production AmxVault specifically so the two can never be confused on-chain.
+///
+/// UPGRADEABLE like AmxVault: `testToken` used to be immutable and now lives in storage, after
+/// AmxVaultBase's reserved gap. Same append-only rules apply.
 contract AmxVaultTestERC20 is AmxVaultBase {
     using SafeERC20 for IERC20;
 
-    IERC20 public immutable testToken;
+    IERC20 public testToken;
 
     event ToppedUp(address indexed from, uint256 amount);
 
-    constructor(
+    /// @custom:oz-upgrades-unsafe-allow constructor
+    constructor() {
+        _disableInitializers();
+    }
+
+    function initialize(
         address admin,
         address pauser,
         address initialExecutor,
@@ -29,10 +37,11 @@ contract AmxVaultTestERC20 is AmxVaultBase {
         uint256 maxReleasePerDay_,
         address treasuryRecoveryAddress_,
         address testToken_
-    )
-        AmxVaultBase(admin, pauser, initialExecutor, maxReleasePerTx_, maxReleasePerDay_, treasuryRecoveryAddress_)
-    {
+    ) external initializer {
         require(testToken_ != address(0), "invalid test token");
+        __AmxVaultBase_init(
+            admin, pauser, initialExecutor, maxReleasePerTx_, maxReleasePerDay_, treasuryRecoveryAddress_, address(0)
+        );
         testToken = IERC20(testToken_);
     }
 
