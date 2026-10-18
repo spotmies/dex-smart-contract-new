@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: UNLICENSED
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.22;
 
 import {Test} from "forge-std/Test.sol";
 import {AmxSale} from "../src/AmxSale.sol";
+import {TransparentUpgradeableProxy} from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
+import {AmxUpgradeableDeploy} from "../script/lib/AmxUpgradeableDeploy.sol";
 import {MockERC20} from "../src/MockERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
@@ -78,6 +80,11 @@ contract AmxSaleTest is Test {
     address public usdcTreasury = makeAddr("usdcTreasury");
     address public usdtTreasury = makeAddr("usdtTreasury");
     address public buyer = makeAddr("buyer");
+    address public upgradeAdmin = makeAddr("upgradeAdmin");
+
+    /// @dev Shared implementation for the initialize-revert tests, so the only call they make is
+    /// the proxy creation that is expected to revert.
+    AmxSale public impl;
 
     uint256 public constant AMX_PRICE = 0.5e18; // $0.50
     uint256 public constant MIN_PURCHASE = 1e18; // $1
@@ -97,50 +104,66 @@ contract AmxSaleTest is Test {
         usdt = new MockERC20("Tether", "USDT");
         feed = new MockAggregatorV3();
 
-        sale = new AmxSale(
-            admin,
-            pauser,
-            address(usdc),
-            address(usdt),
-            address(feed),
-            bnbTreasury,
-            usdcTreasury,
-            usdtTreasury,
-            AMX_PRICE,
-            MIN_PURCHASE,
-            MAX_PURCHASE
-        );
+        sale = _deploySale(address(usdc));
+        impl = new AmxSale();
 
         usdc.mint(buyer, 1_000_000 ether);
         usdt.mint(buyer, 1_000_000 ether);
         vm.deal(buyer, 1_000 ether);
     }
 
+    /// @dev A full sale deployment (implementation + proxy) with the standard config, `usdcToken`
+    /// as its USDC.
+    function _deploySale(address usdcToken) internal returns (AmxSale s) {
+        (s,) = AmxUpgradeableDeploy.deploySale(
+            AmxUpgradeableDeploy.SaleConfig(
+                admin, pauser, usdcToken, address(usdt), address(feed), bnbTreasury, usdcTreasury, usdtTreasury,
+                AMX_PRICE, MIN_PURCHASE, MAX_PURCHASE
+            ),
+            upgradeAdmin
+        );
+    }
+
+    /// @dev A proxy over the shared implementation, in a single external call.
+    function _proxy(bytes memory init) internal returns (AmxSale) {
+        return AmxSale(address(new TransparentUpgradeableProxy(address(impl), upgradeAdmin, init)));
+    }
+
     // ==========================================
-    //              CONSTRUCTOR
+    //              INITIALIZE
     // ==========================================
 
-    function test_ConstructorSetsConfig() public view {
+    function test_InitializeSetsConfig() public view {
         assertTrue(sale.hasRole(sale.DEFAULT_ADMIN_ROLE(), admin));
         assertTrue(sale.hasRole(sale.PAUSER_ROLE(), pauser));
         assertEq(sale.amxPriceUsdE18(), AMX_PRICE);
         assertEq(sale.bnbTreasury(), bnbTreasury);
         assertEq(sale.usdcTreasury(), usdcTreasury);
         assertEq(sale.usdtTreasury(), usdtTreasury);
+        // Formerly immutables / a field initialiser: must be set by initialize() behind a proxy.
+        assertEq(address(sale.usdc()), address(usdc));
+        assertEq(address(sale.usdt()), address(usdt));
+        assertEq(sale.usdcDecimals(), 18);
+        assertEq(sale.usdtDecimals(), 18);
+        assertEq(sale.feedMaxStale(), 1 hours);
     }
 
-    function test_RevertWhen_ConstructorZeroAdmin() public {
+    function test_RevertWhen_InitializeZeroAdmin() public {
+        bytes memory init = abi.encodeCall(
+            AmxSale.initialize,
+            (address(0), pauser, address(usdc), address(usdt), address(feed), bnbTreasury, usdcTreasury, usdtTreasury, AMX_PRICE, MIN_PURCHASE, MAX_PURCHASE)
+        );
         vm.expectRevert("invalid admin");
-        new AmxSale(
-            address(0), pauser, address(usdc), address(usdt), address(feed), bnbTreasury, usdcTreasury, usdtTreasury, AMX_PRICE, MIN_PURCHASE, MAX_PURCHASE
-        );
+        _proxy(init);
     }
 
-    function test_RevertWhen_ConstructorInvalidLimits() public {
-        vm.expectRevert("invalid limits");
-        new AmxSale(
-            admin, pauser, address(usdc), address(usdt), address(feed), bnbTreasury, usdcTreasury, usdtTreasury, AMX_PRICE, MAX_PURCHASE, MIN_PURCHASE
+    function test_RevertWhen_InitializeInvalidLimits() public {
+        bytes memory init = abi.encodeCall(
+            AmxSale.initialize,
+            (admin, pauser, address(usdc), address(usdt), address(feed), bnbTreasury, usdcTreasury, usdtTreasury, AMX_PRICE, MAX_PURCHASE, MIN_PURCHASE)
         );
+        vm.expectRevert("invalid limits");
+        _proxy(init);
     }
 
     // ==========================================
@@ -261,9 +284,7 @@ contract AmxSaleTest is Test {
         // MockERC20 used elsewhere — real BSC USDC/USDT are 18 decimals, but the math must be
         // correct for any decimals count.
         SixDecimalToken sixDec = new SixDecimalToken();
-        AmxSale saleWithSixDec = new AmxSale(
-            admin, pauser, address(sixDec), address(usdt), address(feed), bnbTreasury, usdcTreasury, usdtTreasury, AMX_PRICE, MIN_PURCHASE, MAX_PURCHASE
-        );
+        AmxSale saleWithSixDec = _deploySale(address(sixDec));
         sixDec.mint(buyer, 1000 * 10 ** 6);
 
         vm.startPrank(buyer);
@@ -309,9 +330,7 @@ contract AmxSaleTest is Test {
         // Same purchaseId, a different (hypothetical) AmxSale deployment must produce a
         // different depositId — this is exactly what prevents a future redeploy's purchases
         // from ever colliding with this one's in AmxVault's nullifier mapping.
-        AmxSale otherSale = new AmxSale(
-            admin, pauser, address(usdc), address(usdt), address(feed), bnbTreasury, usdcTreasury, usdtTreasury, AMX_PRICE, MIN_PURCHASE, MAX_PURCHASE
-        );
+        AmxSale otherSale = _deploySale(address(usdc));
         assertTrue(sale.computeDepositId(1) != otherSale.computeDepositId(1));
     }
 

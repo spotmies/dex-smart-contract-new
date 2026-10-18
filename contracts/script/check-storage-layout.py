@@ -11,6 +11,9 @@ CONTRACTS = [
     ("src/new_perp/src/core/Market.sol", "Market"),
     ("src/new_perp/src/core/Vault.sol", "Vault"),
     ("src/P2PTokenEscrow.sol", "P2PTokenEscrows"),
+    ("src/AmxSale.sol", "AmxSale"),
+    ("src/AmxVault.sol", "AmxVault"),
+    ("src/AmxVaultTestERC20.sol", "AmxVaultTestERC20"),
 ]
 
 

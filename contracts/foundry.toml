@@ -7,3 +7,11 @@ optimizer_runs = 200
 via_ir = true
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+
+# Amero X (chain 3535) only enables forks through London: no PUSH0, MCOPY or transient storage.
+# Build and deploy AmxVault with FOUNDRY_PROFILE=amerox. Separate out/cache dirs keep these London
+# artifacts from ever mixing with the default (newer-EVM) build.
+[profile.amerox]
+evm_version = "london"
+out = "out-amerox"
+cache_path = "cache-amerox"
